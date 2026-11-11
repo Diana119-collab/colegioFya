@@ -3,12 +3,32 @@ import { useState } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { asignarEspecialidades, normalizarEspecialidad, Asignacion } from "@/lib/ept";
+import { asignarEspecialidades, normalizarEspecialidad, leerTodo, Asignacion } from "@/lib/ept";
 
 type Fila = Record<string, string>;
+type Existente = { id: string; dni: string | null; correo: string | null; apellidos: string; nombres: string };
 
 const norm = (s: string) =>
-  s.toString().trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  s.toString().trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
+
+/** Traduce los encabezados del archivo (ej. "APELLIDOS Y NOMBRES", "CORREO INSTITUCIONAL", "GRAD") a nombres internos. */
+function canon(k: string): string {
+  const t = norm(k);
+  if (t.startsWith("dni") || t === "documento") return "dni";
+  if (t.includes("apellidos") && t.includes("nombres")) return "apellidos y nombres";
+  if (t === "apellidos") return "apellidos";
+  if (t === "nombres") return "nombres";
+  if (t === "sx" || t === "sexo" || t === "genero") return "sexo";
+  if (t.includes("correo") || t.includes("email") || t.includes("e-mail")) return "correo";
+  if (t === "taller" || t.startsWith("especialidad")) return "especialidad";
+  if (t === "docente" || t === "profesor") return "docente";
+  if (t.startsWith("grad")) return "grado";
+  if (t.startsWith("secc")) return "seccion";
+  if (t === "nivel") return "nivel";
+  if (t.startsWith("apoderado")) return "apoderado";
+  if (t.startsWith("celular") || t.startsWith("telefono") || t.startsWith("cel")) return "celular";
+  return t;
+}
 
 async function leerArchivo(file: File): Promise<Fila[]> {
   let rows: Record<string, unknown>[];
@@ -22,12 +42,32 @@ async function leerArchivo(file: File): Promise<Fila[]> {
     const wb = XLSX.read(await file.arrayBuffer());
     rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
   }
-  return rows.map((r) => {
-    const o: Fila = {};
-    for (const k in r) o[norm(k)] = String(r[k] ?? "").trim();
-    return o;
-  });
+  return rows
+    .map((r) => {
+      const o: Fila = {};
+      for (const k in r) o[canon(k)] = String(r[k] ?? "").trim();
+      return o;
+    })
+    .filter((o) => Object.values(o).some((v) => v));
 }
+
+/** "ATO TORRES, OMAR LEONEL" -> apellidos "ATO TORRES", nombres "OMAR LEONEL" */
+function separarNombre(f: Fila): { apellidos: string; nombres: string; aviso?: string } {
+  if (f.apellidos && f.nombres) return { apellidos: f.apellidos, nombres: f.nombres };
+  const full = f["apellidos y nombres"] ?? "";
+  const i = full.indexOf(",");
+  if (i > 0) return { apellidos: full.slice(0, i).trim(), nombres: full.slice(i + 1).trim() };
+  const p = full.split(/\s+/).filter(Boolean);       // sin coma: 2 primeras palabras = apellidos
+  if (p.length >= 3) return { apellidos: p.slice(0, 2).join(" "), nombres: p.slice(2).join(" "), aviso: "sin coma, se asumieron 2 apellidos" };
+  return { apellidos: full, nombres: "" };
+}
+
+const claveNombre = (a: string, n: string) => norm(`${a}|${n}`);
+const normCorreo = (c?: string | null) => (c ?? "").trim().toLowerCase();
+const normSexo = (s?: string) => {
+  const t = norm(s ?? "");
+  return t.startsWith("h") || t === "m" && false ? "H" : t.startsWith("m") ? "M" : null;
+};
 
 export default function Importar() {
   const [tipo, setTipo] = useState<"alumnos" | "ept">("alumnos");
@@ -42,89 +82,123 @@ export default function Importar() {
     setLog([]);
   }
 
+  async function cargarExistentes(): Promise<Existente[]> {
+    const sb = supabase();
+    return leerTodo<Existente>((d, h) => sb.from("estudiantes").select("id,dni,correo,apellidos,nombres").range(d, h));
+  }
+
+  function indice(ex: Existente[]) {
+    const dni = new Map<string, string>(), correo = new Map<string, string>(), nombre = new Map<string, string>();
+    for (const e of ex) {
+      if (e.dni) dni.set(e.dni, e.id);
+      if (e.correo) correo.set(normCorreo(e.correo), e.id);
+      nombre.set(claveNombre(e.apellidos, e.nombres), e.id);
+    }
+    return (f: Fila, ap: string, no: string) =>
+      (f.dni && dni.get(f.dni)) || (f.correo && correo.get(normCorreo(f.correo))) || nombre.get(claveNombre(ap, no)) || null;
+  }
+
   async function importarAlumnos() {
     const sb = supabase();
     const out: string[] = [];
-    let ok = 0;
-    // 1) secciones
-    const claves = new Map<string, { nivel: string; grado: number; seccion: string }>();
-    for (const f of filas) {
+
+    // 1) aulas (nivel + grado + sección). Si el archivo no trae nivel se asume secundaria.
+    const aulas = new Map<string, { nivel: string; grado: number; seccion: string }>();
+    const val = filas.map((f, i) => {
       const nivel = norm(f.nivel || "secundaria");
       const grado = parseInt(f.grado);
-      const seccion = (f.seccion || "A").toUpperCase();
-      if (!["inicial", "primaria", "secundaria"].includes(nivel) || !grado)
-        continue;
-      claves.set(`${nivel}|${grado}|${seccion}`, { nivel, grado, seccion });
-    }
-    if (claves.size)
-      await sb.from("secciones").upsert([...claves.values()], { onConflict: "nivel,grado,seccion" });
-    const { data: secs } = await sb.from("secciones").select("*");
-    const mapa = new Map((secs ?? []).map((s) => [`${s.nivel}|${s.grado}|${s.seccion}`, s.id]));
-
-    // 2) estudiantes (por DNI)
-    const lote: Record<string, unknown>[] = [];
-    filas.forEach((f, i) => {
-      const nivel = norm(f.nivel || "secundaria");
-      const id = mapa.get(`${nivel}|${parseInt(f.grado)}|${(f.seccion || "A").toUpperCase()}`);
-      if (!id || !f.apellidos || !f.nombres) {
-        out.push(`Fila ${i + 2}: datos incompletos o nivel/grado inválido, omitida`);
-        return;
-      }
-      lote.push({
-        dni: f.dni || null, apellidos: f.apellidos, nombres: f.nombres, seccion_id: id,
-        correo: f.correo || f.email || null,
-        apoderado: f.apoderado || null, celular_apoderado: f.celular || f.celular_apoderado || null,
-      });
+      const seccion = (f.seccion || "").toUpperCase().trim();
+      const { apellidos, nombres, aviso } = separarNombre(f);
+      let error = "";
+      if (!apellidos || !nombres) error = "falta apellidos o nombres";
+      else if (!["inicial", "primaria", "secundaria"].includes(nivel)) error = `nivel "${f.nivel}" inválido`;
+      else if (!grado || !seccion) error = "falta grado o sección";
+      if (aviso) out.push(`Fila ${i + 2} (${apellidos}): ${aviso}`);
+      if (!error) aulas.set(`${nivel}|${grado}|${seccion}`, { nivel, grado, seccion });
+      return { f, i, nivel, grado, seccion, apellidos, nombres, error };
     });
-    for (let i = 0; i < lote.length; i += 200) {
-      const parte = lote.slice(i, i + 200);
-      const { error } = await sb.from("estudiantes").upsert(parte, { onConflict: "dni" });
-      if (error) out.push(`Error: ${error.message}`);
-      else ok += parte.length;
+    if (aulas.size) {
+      const { error } = await sb.from("secciones").upsert([...aulas.values()], { onConflict: "nivel,grado,seccion" });
+      if (error) return setLog([`Error creando aulas: ${error.message}`]);
     }
-    out.unshift(`Importados/actualizados: ${ok} de ${filas.length}`);
+    const { data: secs } = await sb.from("secciones").select("*");
+    const aulaId = new Map((secs ?? []).map((s) => [`${s.nivel}|${s.grado}|${s.seccion}`, s.id]));
+
+    // 2) crear o actualizar (se reconoce al alumno por DNI, luego correo, luego nombre)
+    const buscar = indice(await cargarExistentes());
+    const nuevos: Record<string, unknown>[] = [];
+    const cambios: Record<string, unknown>[] = [];
+    const vistos = new Set<string>();
+    for (const v of val) {
+      if (v.error) { out.push(`Fila ${v.i + 2}: ${v.error}, omitida`); continue; }
+      const clave = v.f.dni || normCorreo(v.f.correo) || claveNombre(v.apellidos, v.nombres);
+      if (vistos.has(clave)) { out.push(`Fila ${v.i + 2}: ${v.apellidos}, ${v.nombres} aparece repetido en el archivo, omitida`); continue; }
+      vistos.add(clave);
+      const datos: Record<string, unknown> = {
+        dni: v.f.dni || null, apellidos: v.apellidos, nombres: v.nombres,
+        correo: normCorreo(v.f.correo) || null, sexo: normSexo(v.f.sexo),
+        seccion_id: aulaId.get(`${v.nivel}|${v.grado}|${v.seccion}`),
+        apoderado: v.f.apoderado || null, celular_apoderado: v.f.celular || null,
+      };
+      const id = buscar(v.f, v.apellidos, v.nombres);
+      if (id) {
+        // al actualizar no se borran datos que el archivo no trae
+        for (const k of ["dni", "correo", "sexo", "apoderado", "celular_apoderado"]) if (!datos[k]) delete datos[k];
+        cambios.push({ id, ...datos });
+      } else nuevos.push(datos);
+    }
+    for (let i = 0; i < nuevos.length; i += 200) {
+      const { error } = await sb.from("estudiantes").insert(nuevos.slice(i, i + 200));
+      if (error) out.push(`Error al crear: ${error.message}`);
+    }
+    for (let i = 0; i < cambios.length; i += 200) {
+      const { error } = await sb.from("estudiantes").upsert(cambios.slice(i, i + 200), { onConflict: "id" });
+      if (error) out.push(`Error al actualizar: ${error.message}`);
+    }
+    out.unshift(`Estudiantes nuevos: ${nuevos.length} · actualizados: ${cambios.length} · omitidos: ${filas.length - nuevos.length - cambios.length}`);
+
+    // 3) especialidad EPT (columna Taller / especialidad)
     if (filas.some((f) => f.especialidad)) out.push(...(await aplicarEspecialidades()));
     setLog(out);
   }
 
-  // Asigna la especialidad EPT (1 por estudiante) leyendo columnas dni + especialidad
+  /** Deja a cada estudiante en UNA especialidad. Reconoce abreviaturas ("Computac"). */
   async function aplicarEspecialidades(): Promise<string[]> {
     const sb = supabase();
     const out: string[] = [];
-    const dnis = filas.filter((f) => f.especialidad && f.dni).map((f) => f.dni);
-    const porDni = new Map<string, { id: string; grado: number; nivel: string }>();
-    for (let i = 0; i < dnis.length; i += 200) {
-      const { data } = await sb.from("estudiantes").select("id,dni,secciones(nivel,grado)").in("dni", dnis.slice(i, i + 200));
-      for (const e of data ?? []) {
-        const sec = e.secciones as unknown as { nivel: string; grado: number };
-        porDni.set(e.dni, { id: e.id, grado: sec.grado, nivel: sec.nivel });
-      }
-    }
+    const ex = await cargarExistentes();
+    const buscar = indice(ex);
+    const ids = new Map<string, { grado: number; nivel: string }>();
+    const { data: sec } = await sb.from("estudiantes").select("id,secciones(nivel,grado)").in("id", ex.map((e) => e.id).slice(0, 0));
+    void sec;
+    const todos = await leerTodo<{ id: string; secciones: { nivel: string; grado: number } }>((d, h) =>
+      sb.from("estudiantes").select("id,secciones(nivel,grado)").range(d, h) as never);
+    for (const e of todos) ids.set(e.id, e.secciones);
+
     const items: Asignacion[] = [];
     filas.forEach((f, i) => {
       if (!f.especialidad) return;
-      const est = porDni.get(f.dni);
+      const { apellidos, nombres } = separarNombre(f);
+      const id = buscar(f, apellidos, nombres);
       const esp = normalizarEspecialidad(f.especialidad);
-      if (!est) return void out.push(`Fila ${i + 2}: DNI ${f.dni || "(vacío)"} no encontrado, sin especialidad`);
-      if (est.nivel !== "secundaria") return void out.push(`Fila ${i + 2}: la EPT es solo de secundaria, se omitió`);
-      if (!esp) return void out.push(`Fila ${i + 2}: especialidad "${f.especialidad}" no reconocida`);
-      items.push({ estudianteId: est.id, grado: est.grado, especialidad: esp });
+      const quien = apellidos ? `${apellidos}, ${nombres}` : f.dni || f.correo;
+      if (!id) return void out.push(`Fila ${i + 2}: ${quien} no encontrado, sin especialidad`);
+      const s = ids.get(id);
+      if (!s || s.nivel !== "secundaria") return void out.push(`Fila ${i + 2}: ${quien}: la EPT es solo de secundaria, se omitió`);
+      if (!esp) return void out.push(`Fila ${i + 2}: ${quien}: taller "${f.especialidad}" no reconocido`);
+      items.push({ estudianteId: id, grado: s.grado, especialidad: esp });
     });
     const r = await asignarEspecialidades(sb, items);
     out.unshift(r.error ? `Error en especialidades: ${r.error}` : `Especialidades EPT asignadas: ${items.length}`);
     return out;
   }
 
-  async function importarEpt() {
-    // columnas: dni, especialidad  (cada estudiante queda en UNA sola especialidad)
-    const out = await aplicarEspecialidades();
-    setLog(out);
-  }
-
   async function ejecutar() {
     setBusy(true);
-    try { await (tipo === "alumnos" ? importarAlumnos() : importarEpt()); }
-    finally { setBusy(false); }
+    try {
+      if (tipo === "alumnos") await importarAlumnos();
+      else setLog(await aplicarEspecialidades());
+    } finally { setBusy(false); }
   }
 
   const cols = filas[0] ? Object.keys(filas[0]) : [];
@@ -135,19 +209,19 @@ export default function Importar() {
         {(["alumnos", "ept"] as const).map((t) => (
           <button key={t} onClick={() => { setTipo(t); setFilas([]); setLog([]); }}
             className={`px-3 py-1 rounded border ${tipo === t ? "bg-red-700 text-white" : "bg-white"}`}>
-            {t === "alumnos" ? "Estudiantes" : "Especialidades EPT"}
+            {t === "alumnos" ? "Estudiantes" : "Solo especialidades EPT"}
           </button>
         ))}
       </div>
       <p className="text-sm text-gray-600 mb-2">
         {tipo === "alumnos"
-          ? "Columnas: dni, apellidos, nombres, correo, nivel (inicial/primaria/secundaria), grado, seccion, apoderado, celular. Opcional para secundaria: especialidad."
-          : "Columnas: dni, especialidad (Computación, Industria del vestido, Industria alimentaria, Carpintería metálica, Ebanistería, Electricidad). Cada estudiante queda en una sola especialidad; si ya tenía otra, se cambia. El estudiante debe existir (se busca por DNI)."}
+          ? "Formato del colegio: dni, APELLIDOS Y NOMBRES (en una columna: «APELLIDOS, NOMBRES»), Sx, CORREO INSTITUCIONAL, Taller, Docente, GRAD, SECCION. También acepta columnas separadas apellidos y nombres, nivel, apoderado y celular. Sin columna nivel se asume secundaria. Si el DNI está vacío, se reconoce al alumno por su correo o por su nombre, así que puedes volver a importar sin duplicar."
+          : "Columnas: dni (o correo institucional) y taller/especialidad. Cada estudiante queda en una sola especialidad; si ya tenía otra, se cambia. El estudiante debe existir."}
       </p>
       <input type="file" accept=".csv,.xlsx,.xls" onChange={alElegir} className="mb-4" />
       {filas.length > 0 && (
         <>
-          <p className="mb-2">{filas.length} filas detectadas. Vista previa:</p>
+          <p className="mb-2">{filas.length} filas detectadas. Vista previa (columnas reconocidas):</p>
           <div className="overflow-auto max-h-72 bg-white border rounded mb-3">
             <table className="text-sm w-full">
               <thead><tr>{cols.map((c) => <th key={c} className="text-left p-1 border-b">{c}</th>)}</tr></thead>
