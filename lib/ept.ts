@@ -17,8 +17,8 @@ export function normalizarEspecialidad(texto: string): string | null {
   const t = sinTildes(texto);
   if (!t) return null;
   if (t.includes("comput")) return "Computación";
-  if (t.includes("vestido") || t.includes("moda") || t.includes("confec")) return "Industria del vestido";
-  if (t.includes("aliment")) return "Industria alimentaria";
+  if (t.includes("vest") || t.includes("moda") || t.includes("confec")) return "Industria del vestido";
+  if (t.includes("alim")) return "Industria alimentaria";
   if (t.includes("metal")) return "Carpintería metálica";
   if (t.includes("ebanist") || t.includes("madera") || t.includes("carpinter")) return "Ebanistería";
   if (t.includes("electric")) return "Electricidad";

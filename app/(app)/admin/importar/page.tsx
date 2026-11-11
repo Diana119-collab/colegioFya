@@ -66,7 +66,7 @@ const claveNombre = (a: string, n: string) => norm(`${a}|${n}`);
 const normCorreo = (c?: string | null) => (c ?? "").trim().toLowerCase();
 const normSexo = (s?: string) => {
   const t = norm(s ?? "");
-  return t.startsWith("h") || t === "m" && false ? "H" : t.startsWith("m") ? "M" : null;
+  return t.startsWith("h") ? "H" : t.startsWith("m") ? "M" : null;
 };
 
 export default function Importar() {
@@ -166,11 +166,8 @@ export default function Importar() {
   async function aplicarEspecialidades(): Promise<string[]> {
     const sb = supabase();
     const out: string[] = [];
-    const ex = await cargarExistentes();
-    const buscar = indice(ex);
+    const buscar = indice(await cargarExistentes());
     const ids = new Map<string, { grado: number; nivel: string }>();
-    const { data: sec } = await sb.from("estudiantes").select("id,secciones(nivel,grado)").in("id", ex.map((e) => e.id).slice(0, 0));
-    void sec;
     const todos = await leerTodo<{ id: string; secciones: { nivel: string; grado: number } }>((d, h) =>
       sb.from("estudiantes").select("id,secciones(nivel,grado)").range(d, h) as never);
     for (const e of todos) ids.set(e.id, e.secciones);
