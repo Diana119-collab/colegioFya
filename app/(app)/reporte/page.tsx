@@ -24,6 +24,8 @@ function Contenido() {
   const [soloPend, setSoloPend] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [noLectivo, setNoLectivo] = useState<string | null>(null);
+  const [grado, setGrado] = useState("");
+  const [seccion, setSeccion] = useState("");
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -40,7 +42,10 @@ function Contenido() {
   }, [fecha]);
   useEffect(() => { cargar(); }, [cargar]);
 
-  const visibles = filas.filter((f) => !nivel || f.nivel === nivel);
+  const delNivel = filas.filter((f) => !nivel || f.nivel === nivel);
+  const grados = [...new Set(delNivel.map((f) => f.grado))].sort((a, b) => a - b);
+  const secciones = [...new Set(delNivel.filter((f) => String(f.grado) === grado).map((f) => f.seccion))].sort();
+  const visibles = delNivel.filter((f) => (!grado || String(f.grado) === grado) && (!seccion || f.seccion === seccion));
   const resumen = {
     puntual: visibles.filter((f) => f.estado_colegio === "puntual").length,
     tardanza: visibles.filter((f) => f.estado_colegio === "tardanza").length,
@@ -89,16 +94,27 @@ function Contenido() {
       <div className="flex flex-wrap items-end gap-3 mb-4 print:hidden">
         <h2 className="text-2xl font-bold mr-auto">Reporte diario</h2>
         <input type="date" className="border rounded p-2" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        <select className="border rounded p-2" value={nivel} onChange={(e) => setNivel(e.target.value)}>
+        <select className="border rounded p-2" value={nivel} onChange={(e) => { setNivel(e.target.value); setGrado(""); setSeccion(""); }}>
           <option value="">Todos los niveles</option>
           <option value="inicial">Inicial</option><option value="primaria">Primaria</option>
           <option value="secundaria">Secundaria</option>
+        </select>
+        <select className="border rounded p-2 disabled:opacity-40" disabled={!nivel} value={grado}
+          onChange={(e) => { setGrado(e.target.value); setSeccion(""); }}>
+          <option value="">Todos los grados</option>
+          {grados.map((g) => <option key={g} value={g}>{g}{nivel === "inicial" ? " años" : "°"}</option>)}
+        </select>
+        <select className="border rounded p-2 disabled:opacity-40" disabled={!grado} value={seccion} onChange={(e) => setSeccion(e.target.value)}>
+          <option value="">Todas las secciones</option>
+          {secciones.map((x) => <option key={x} value={x}>Sección {x}</option>)}
         </select>
         <label className="text-sm"><input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo pendientes</label>
         <button onClick={cargar} className="border rounded px-3 py-2 bg-white">Actualizar</button>
         <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
       </div>
-      <p className="hidden print:block font-bold">Fe y Alegría 17 — Reporte {fmtFecha(fecha)}</p>
+      <p className="hidden print:block font-bold">
+        Fe y Alegría 17 — Reporte {fmtFecha(fecha)}{nivel && ` · ${nivel}`}{grado && ` ${grado}°`}{seccion && ` ${seccion}`}
+      </p>
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="bg-green-100 rounded p-3"><b className="text-2xl">{resumen.puntual}</b><br />Puntuales</div>
         <div className="bg-amber-100 rounded p-3"><b className="text-2xl">{resumen.tardanza}</b><br />Tardanzas</div>

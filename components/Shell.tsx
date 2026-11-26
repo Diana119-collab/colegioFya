@@ -12,7 +12,7 @@ const MENU: { href: string; label: string; roles: Rol[] }[] = [
   { href: "/reporte", label: "Reporte diario", roles: ["auxiliar", "admin"] },
   { href: "/aula", label: "Mi aula", roles: ["profesor", "admin"] },
   { href: "/mi-reporte", label: "Reporte de mi clase", roles: ["profesor", "admin"] },
-  { href: "/admin/estudiantes", label: "Estudiantes", roles: ["admin"] },
+  { href: "/admin/estudiantes", label: "Estudiantes", roles: ["admin", "auxiliar"] },
   { href: "/admin/importar", label: "Importar CSV/Excel", roles: ["admin"] },
   { href: "/admin/qr", label: "Stickers QR", roles: ["admin"] },
   { href: "/admin/clases", label: "Cursos y grupos", roles: ["admin"] },

@@ -183,10 +183,12 @@ export default function Importar() {
       const s = ids.get(id);
       if (!s || s.nivel !== "secundaria") return void out.push(`Fila ${i + 2}: ${quien}: la EPT es solo de secundaria, se omitió`);
       if (!esp) return void out.push(`Fila ${i + 2}: ${quien}: taller "${f.especialidad}" no reconocido`);
-      items.push({ estudianteId: id, grado: s.grado, especialidad: esp });
+      items.push({ estudianteId: id, grado: s.grado, especialidad: esp, docente: f.docente || null });
     });
     const r = await asignarEspecialidades(sb, items);
     out.unshift(r.error ? `Error en especialidades: ${r.error}` : `Especialidades EPT asignadas: ${items.length}`);
+    if (r.docentesSinUsuario.length)
+      out.push(`Docentes sin usuario que coincida (créalos en Usuarios y vuelve a importar, o asígnalos en Cursos y grupos): ${r.docentesSinUsuario.join(", ")}`);
     return out;
   }
 
@@ -212,7 +214,7 @@ export default function Importar() {
       </div>
       <p className="text-sm text-gray-600 mb-2">
         {tipo === "alumnos"
-          ? "Formato del colegio: dni, APELLIDOS Y NOMBRES (en una columna: «APELLIDOS, NOMBRES»), Sx, CORREO INSTITUCIONAL, Taller, Docente, GRAD, SECCION. También acepta columnas separadas apellidos y nombres, nivel, apoderado y celular. Sin columna nivel se asume secundaria. Si el DNI está vacío, se reconoce al alumno por su correo o por su nombre, así que puedes volver a importar sin duplicar."
+          ? "Formato del colegio: dni, APELLIDOS Y NOMBRES (en una columna: «APELLIDOS, NOMBRES»), Sx, CORREO INSTITUCIONAL, Taller, Docente, GRAD, SECCION. Si un taller tiene varios docentes en un grado, se crea una clase por docente y se asigna sola al usuario que coincida («Edemita L.» → Edemita Lopez). También acepta columnas separadas apellidos y nombres, nivel, apoderado y celular. Sin columna nivel se asume secundaria. Si el DNI está vacío, se reconoce al alumno por su correo o por su nombre, así que puedes volver a importar sin duplicar."
           : "Columnas: dni (o correo institucional) y taller/especialidad. Cada estudiante queda en una sola especialidad; si ya tenía otra, se cambia. El estudiante debe existir."}
       </p>
       <input type="file" accept=".csv,.xlsx,.xls" onChange={alElegir} className="mb-4" />
