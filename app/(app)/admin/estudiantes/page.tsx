@@ -114,7 +114,7 @@ export default function Estudiantes() {
   const delFiltro = secs.filter((s) => !filtro.nivel || s.nivel === filtro.nivel);
   const gradosFiltro = [...new Set(delFiltro.map((s) => s.grado))].sort((a, b) => a - b);
   const seccionesFiltro = [...new Set(delFiltro.filter((s) => String(s.grado) === filtro.grado).map((s) => s.seccion))].sort();
-  const columnas = esAdmin ? 7 : 4;
+  const columnas = esAdmin ? 6 : 4;
   const inp = "border rounded p-2 w-full";
 
   return (
@@ -197,7 +197,7 @@ export default function Estudiantes() {
         <table className="w-full text-sm">
           <thead><tr className="text-left border-b">
             <th className="p-2">Apellidos y nombres</th><th>DNI</th>
-            {esAdmin && <><th>Correo</th><th>Especialidad EPT</th></>}
+            {esAdmin && <th>Correo</th>}
             <th>Apoderado</th><th>Celular</th>
             {esAdmin && <th />}</tr></thead>
           <tbody>{f.slice(0, 300).map((e, i, arr) => (
@@ -211,10 +211,7 @@ export default function Estudiantes() {
               )}
               <tr className="border-b">
                 <td className="p-2">{e.apellidos}, {e.nombres}</td><td>{e.dni}</td>
-                {esAdmin && <>
-                  <td>{e.correo}</td>
-                  <td>{esp[e.id] ? `${esp[e.id].especialidad}${esp[e.id].docente ? " · " + esp[e.id].docente : ""}` : ""}</td>
-                </>}
+                {esAdmin && <td>{e.correo}</td>}
                 <td>{e.apoderado}</td><td>{e.celular_apoderado}</td>
                 {esAdmin && (
                   <td className="whitespace-nowrap">
