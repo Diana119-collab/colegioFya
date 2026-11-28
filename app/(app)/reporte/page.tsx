@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePerfil } from "@/components/Shell";
 import { supabase, hoyLima, waLink } from "@/lib/supabase";
 import { leerTodo } from "@/lib/ept";
@@ -15,29 +15,80 @@ type Item = { fila: Fila; motivo: string; detalle: string; texto: string; extra?
 const fmtFecha = (f: string) =>
   new Date(f + "T12:00:00").toLocaleDateString("es-PE", { weekday: "long", day: "numeric", month: "long" });
 
+const sinTildes = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+/** Caja de incidencia de un estudiante en un día. Vacía y guardada = se borra la anotación. */
+function Incidencia({ inicial, onGuardar }: { inicial: string; onGuardar: (t: string) => Promise<string | null> }) {
+  const [texto, setTexto] = useState(inicial);
+  const [guardado, setGuardado] = useState(inicial);
+  const [estado, setEstado] = useState("");
+  const cambiado = texto.trim() !== guardado.trim();
+
+  async function guardar() {
+    if (!cambiado) return;
+    setEstado("Guardando…");
+    const error = await onGuardar(texto.trim());
+    if (error) return setEstado("Error: " + error);
+    setGuardado(texto);
+    setEstado("Guardado ✓");
+  }
+
+  return (
+    <div className="min-w-56">
+      <textarea rows={2} value={texto} placeholder="Anotar incidencia (opcional)"
+        className={`border rounded p-1 w-full ${cambiado ? "bg-amber-50 border-amber-400" : ""} print:border-0`}
+        onChange={(e) => { setTexto(e.target.value); setEstado(""); }} />
+      <div className="flex items-center gap-2 print:hidden">
+        <button onClick={guardar} disabled={!cambiado}
+          className="bg-red-700 text-white px-3 py-1 rounded text-xs disabled:opacity-30">Guardar</button>
+        <span className="text-xs text-gray-600">{cambiado && !estado ? "Sin guardar" : estado}</span>
+      </div>
+    </div>
+  );
+}
+
 function Contenido() {
   const perfil = usePerfil();
   const [fecha, setFecha] = useState(hoyLima());
   const [filas, setFilas] = useState<Fila[]>([]);
   const [avisados, setAvisados] = useState<Set<string>>(new Set());
+  const [incid, setIncid] = useState<Map<string, string>>(new Map());
+  const [fechaCargada, setFechaCargada] = useState("");   // fecha a la que pertenecen los datos en pantalla
   const [nivel, setNivel] = useState(perfil.nivel ?? "");
-  const [soloPend, setSoloPend] = useState(false);
-  const [cargando, setCargando] = useState(false);
-  const [noLectivo, setNoLectivo] = useState<string | null>(null);
   const [grado, setGrado] = useState("");
   const [seccion, setSeccion] = useState("");
+  const [q, setQ] = useState("");
+  const [soloPend, setSoloPend] = useState(false);
+  const [todos, setTodos] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [noLectivo, setNoLectivo] = useState<string | null>(null);
+  const [errorIncid, setErrorIncid] = useState("");
+  const pedido = useRef(0);
 
   const cargar = useCallback(async () => {
+    const n = ++pedido.current;
     setCargando(true);
+    setFechaCargada("");
     const sb = supabase();
-    const [datos, { data: av }, { data: nl }] = await Promise.all([
+    let fallo = "";
+    const [datos, { data: av }, { data: nl }, inc] = await Promise.all([
       leerTodo<Fila>((d, h) => sb.rpc("reporte_diario", { p_fecha: fecha }).range(d, h)),
       sb.from("avisos_padres").select("estudiante_id,motivo,detalle").eq("fecha", fecha).eq("avisado", true),
       sb.rpc("motivo_no_lectivo", { p_fecha: fecha }),
+      leerTodo<{ estudiante_id: string; detalle: string }>(async (d, h) => {
+        const r = await sb.from("incidencias_diarias").select("estudiante_id,detalle").eq("fecha", fecha)
+          .order("estudiante_id").range(d, h);
+        if (r.error) fallo = r.error.message;
+        return r;
+      }),
     ]);
+    if (n !== pedido.current) return;   // llegó tarde: ya se pidió otra fecha
     setNoLectivo((nl as string | null) ?? null);
     setFilas(datos);
     setAvisados(new Set((av ?? []).map((a) => `${a.estudiante_id}|${a.motivo}|${a.detalle}`)));
+    setIncid(new Map(inc.map((x) => [x.estudiante_id, x.detalle])));
+    setErrorIncid(fallo);
+    setFechaCargada(fecha);
     setCargando(false);
   }, [fecha]);
   useEffect(() => { cargar(); }, [cargar]);
@@ -45,7 +96,9 @@ function Contenido() {
   const delNivel = filas.filter((f) => !nivel || f.nivel === nivel);
   const grados = [...new Set(delNivel.map((f) => f.grado))].sort((a, b) => a - b);
   const secciones = [...new Set(delNivel.filter((f) => String(f.grado) === grado).map((f) => f.seccion))].sort();
-  const visibles = delNivel.filter((f) => (!grado || String(f.grado) === grado) && (!seccion || f.seccion === seccion));
+  const visibles = delNivel.filter((f) =>
+    (!grado || String(f.grado) === grado) && (!seccion || f.seccion === seccion) &&
+    sinTildes(`${f.apellidos} ${f.nombres}`).includes(sinTildes(q)));
   const resumen = {
     puntual: visibles.filter((f) => f.estado_colegio === "puntual").length,
     tardanza: visibles.filter((f) => f.estado_colegio === "tardanza").length,
@@ -54,6 +107,7 @@ function Contenido() {
 
   const items: Item[] = [];
   for (const f of visibles) {
+    const antes = items.length;
     const nom = `${f.nombres} ${f.apellidos}`;
     const dia = fmtFecha(fecha);
     if (f.estado_colegio === "falta")
@@ -72,8 +126,14 @@ function Contenido() {
           : `Buenos días. Le informamos del colegio Fe y Alegría 17: su hijo(a) ${nom} llegó TARDE a la clase de ${i.curso} el ${dia}. Gracias.`,
       });
     }
+    // alumnos sin faltas ni tardanzas: se muestran si tienen incidencia o si se pide ver a todos
+    if (items.length === antes && (todos || incid.has(f.estudiante_id)))
+      items.push({ fila: f, motivo: "sin_novedad", detalle: "", texto: "" });
   }
-  const lista = items.filter((it) => !soloPend || !avisados.has(`${it.fila.estudiante_id}|${it.motivo}|${it.detalle}`));
+  const clave = (it: Item) => `${it.fila.estudiante_id}|${it.motivo}|${it.detalle}`;
+  const lista = items.filter((it) => !soloPend || (it.motivo !== "sin_novedad" && !avisados.has(clave(it))));
+  const filasPorAlumno = new Map<string, number>();
+  for (const it of lista) filasPorAlumno.set(it.fila.estudiante_id, (filasPorAlumno.get(it.fila.estudiante_id) ?? 0) + 1);
 
   async function avisar(it: Item) {
     window.open(waLink(it.fila.celular_apoderado, it.texto), "_blank");
@@ -81,36 +141,62 @@ function Contenido() {
       estudiante_id: it.fila.estudiante_id, fecha, motivo: it.motivo, detalle: it.detalle,
       avisado: true, avisado_por: perfil.id, avisado_en: new Date().toISOString(),
     }, { onConflict: "estudiante_id,fecha,motivo,detalle" });
-    setAvisados((s) => new Set(s).add(`${it.fila.estudiante_id}|${it.motivo}|${it.detalle}`));
+    setAvisados((s) => new Set(s).add(clave(it)));
+  }
+
+  async function guardarIncidencia(estudianteId: string, dia: string, texto: string) {
+    const tabla = supabase().from("incidencias_diarias");
+    const { error } = texto
+      ? await tabla.upsert({
+          estudiante_id: estudianteId, fecha: dia, detalle: texto,
+          registrado_por: perfil.id, actualizado_en: new Date().toISOString(),
+        }, { onConflict: "estudiante_id,fecha" })
+      : await tabla.delete().eq("estudiante_id", estudianteId).eq("fecha", dia);
+    if (error) return error.message;
+    // se actualiza el valor en memoria para que no se pierda al cambiar de filtro
+    setIncid((m) => {
+      const nuevo = new Map(m);
+      if (texto) nuevo.set(estudianteId, texto);
+      else nuevo.delete(estudianteId);
+      return nuevo;
+    });
+    return null;
   }
 
   const etiqueta: Record<string, string> = {
     falta_colegio: "Falta al colegio", tardanza_colegio: "Tardanza al colegio",
-    falta_clase: "Falta en clase", tardanza_clase: "Tardanza en clase",
+    falta_clase: "Falta en clase", tardanza_clase: "Tardanza en clase", sin_novedad: "Asistió puntual",
   };
+  const listo = !cargando && fechaCargada === fecha;
 
   return (
     <>
-      <div className="flex flex-wrap items-end gap-3 mb-4 print:hidden">
+      <div className="flex flex-wrap items-center gap-3 mb-3 print:hidden">
         <h2 className="text-2xl font-bold mr-auto">Reporte diario</h2>
-        <input type="date" className="border rounded p-2" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-        <select className="border rounded p-2" value={nivel} onChange={(e) => { setNivel(e.target.value); setGrado(""); setSeccion(""); }}>
+        <input type="date" className="border rounded p-2" value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
+        <button onClick={cargar} className="border rounded px-3 py-2 bg-white">Actualizar</button>
+        <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 mb-4 print:hidden">
+        <select className="border rounded p-2" value={nivel}
+          onChange={(e) => { setNivel(e.target.value); setGrado(""); setSeccion(""); }}>
           <option value="">Todos los niveles</option>
-          <option value="inicial">Inicial</option><option value="primaria">Primaria</option>
-          <option value="secundaria">Secundaria</option>
+          <option value="inicial">Inicial</option><option value="primaria">Primaria</option><option value="secundaria">Secundaria</option>
         </select>
         <select className="border rounded p-2 disabled:opacity-40" disabled={!nivel} value={grado}
+          title={nivel ? "" : "Primero elige el nivel"}
           onChange={(e) => { setGrado(e.target.value); setSeccion(""); }}>
           <option value="">Todos los grados</option>
           {grados.map((g) => <option key={g} value={g}>{g}{nivel === "inicial" ? " años" : "°"}</option>)}
         </select>
-        <select className="border rounded p-2 disabled:opacity-40" disabled={!grado} value={seccion} onChange={(e) => setSeccion(e.target.value)}>
+        <select className="border rounded p-2 disabled:opacity-40" disabled={!grado} value={seccion}
+          title={grado ? "" : "Primero elige el grado"} onChange={(e) => setSeccion(e.target.value)}>
           <option value="">Todas las secciones</option>
           {secciones.map((x) => <option key={x} value={x}>Sección {x}</option>)}
         </select>
-        <label className="text-sm"><input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo pendientes</label>
-        <button onClick={cargar} className="border rounded px-3 py-2 bg-white">Actualizar</button>
-        <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
+        <input className="border rounded p-2 w-full max-w-xs" placeholder="Buscar por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="text-sm"><input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo avisos pendientes</label>
+        <label className="text-sm"><input type="checkbox" checked={todos} onChange={(e) => setTodos(e.target.checked)} /> Incluir puntuales</label>
       </div>
       <p className="hidden print:block font-bold">
         Fe y Alegría 17 — Reporte {fmtFecha(fecha)}{nivel && ` · ${nivel}`}{grado && ` ${grado}°`}{seccion && ` ${seccion}`}
@@ -125,40 +211,56 @@ function Contenido() {
           Día no lectivo ({noLectivo}): no se registran faltas.
         </p>
       )}
-      {cargando && <p>Cargando…</p>}
-      <div className="bg-white border rounded overflow-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left border-b">
-            <th className="p-2">Estudiante</th><th>Aula</th><th>Motivo</th><th>Apoderado</th><th className="print:hidden">WhatsApp</th></tr></thead>
-          <tbody>
-            {lista.map((it, i) => {
-              const ya = avisados.has(`${it.fila.estudiante_id}|${it.motivo}|${it.detalle}`);
-              return (
-                <tr key={i} className="border-b align-top">
-                  <td className="p-2">{it.fila.apellidos}, {it.fila.nombres}</td>
-                  <td className="capitalize">{it.fila.grado}° {it.fila.seccion} {it.fila.nivel}</td>
-                  <td>{etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
-                    {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}</td>
-                  <td>{it.fila.apoderado}<br /><span className="text-gray-500">{it.fila.celular_apoderado}</span></td>
-                  <td className="print:hidden">
-                    {it.fila.celular_apoderado ? (
-                      <button onClick={() => avisar(it)}
-                        className={`px-2 py-1 rounded text-white ${ya ? "bg-gray-400" : "bg-green-600"}`}>
-                        {ya ? "Avisado ✓ (reenviar)" : "Avisar"}
-                      </button>
-                    ) : <span className="text-red-600">Sin celular</span>}
-                  </td>
-                </tr>
-              );
-            })}
-            {lista.length === 0 && !cargando && <tr><td colSpan={5} className="p-4 text-gray-500">Nada que reportar.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {errorIncid && (
+        <p className="bg-red-100 text-red-800 rounded p-3 mb-3 print:hidden">
+          No se pudieron leer las incidencias: {errorIncid}
+        </p>
+      )}
+      {!listo && <p>Cargando…</p>}
+      {listo && (
+        <div className="bg-white border rounded overflow-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left border-b">
+              <th className="p-2">Estudiante</th><th>Aula</th><th>Motivo</th><th>Apoderado</th>
+              <th className="print:hidden">WhatsApp</th><th className="p-2">Incidencia</th></tr></thead>
+            <tbody>
+              {lista.map((it, i) => {
+                const ya = avisados.has(clave(it));
+                const id = it.fila.estudiante_id;
+                const primera = lista[i - 1]?.fila.estudiante_id !== id;   // una sola caja por estudiante
+                return (
+                  <tr key={clave(it)} className="border-b align-top">
+                    <td className="p-2">{it.fila.apellidos}, {it.fila.nombres}</td>
+                    <td className="capitalize">{it.fila.grado}° {it.fila.seccion} {it.fila.nivel}</td>
+                    <td>{etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
+                      {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}</td>
+                    <td>{it.fila.apoderado}<br /><span className="text-gray-500">{it.fila.celular_apoderado}</span></td>
+                    <td className="print:hidden">
+                      {it.motivo === "sin_novedad" ? null : it.fila.celular_apoderado ? (
+                        <button onClick={() => avisar(it)}
+                          className={`px-2 py-1 rounded text-white ${ya ? "bg-gray-400" : "bg-green-600"}`}>
+                          {ya ? "Avisado ✓ (reenviar)" : "Avisar"}
+                        </button>
+                      ) : <span className="text-red-600">Sin celular</span>}
+                    </td>
+                    {primera && (
+                      <td className="p-2" rowSpan={filasPorAlumno.get(id)}>
+                        <Incidencia key={`${fechaCargada}|${id}`} inicial={incid.get(id) ?? ""}
+                          onGuardar={(t) => guardarIncidencia(id, fechaCargada, t)} />
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+              {lista.length === 0 && <tr><td colSpan={6} className="p-4 text-gray-500">Nada que reportar.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
 
 export default function Reporte() {
-  return <><Contenido /></>;
+  return <Contenido />;
 }
