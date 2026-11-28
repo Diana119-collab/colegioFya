@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { RegistroManual } from "@/components/Ingreso";
+import Reloj from "@/components/Reloj";
 
 type Res = { ok: boolean; error?: string; repetido?: boolean; estado?: string; nombre?: string; aula?: string };
 
@@ -74,6 +75,7 @@ function Contenido() {
           </div>
         </div>
         <div>
+          <div className="mb-4"><Reloj /></div>
           <div className={`rounded p-4 mb-4 ${color}`}>
             {!ult && <p>Acerca el QR de la agenda a la cámara.</p>}
             {ult && !ult.ok && <p className="font-bold">{ult.error}</p>}

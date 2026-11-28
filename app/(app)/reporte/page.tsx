@@ -5,6 +5,8 @@ import Dashboard from "@/components/Dashboard";
 import { IngresoDesplegable, Ingreso, horaLima } from "@/components/Ingreso";
 import { supabase, hoyLima, waLink } from "@/lib/supabase";
 import { leerTodo } from "@/lib/ept";
+import Justificar from "@/components/Justificar";
+import { Justificacion, NOMBRE_ESTADO, estadoEfectivo, textoJustificacion } from "@/lib/estados";
 
 type Inc = { curso: string; estado: string; obs: string | null };
 type Fila = {
@@ -65,6 +67,7 @@ function Contenido() {
   const [cargando, setCargando] = useState(false);
   const [noLectivo, setNoLectivo] = useState<string | null>(null);
   const [errorIncid, setErrorIncid] = useState("");
+  const [justif, setJustif] = useState<Map<string, Justificacion>>(new Map());
   const [vista, setVista] = useState<"lista" | "estadisticas">("lista");
   const pedido = useRef(0);
 
@@ -74,12 +77,18 @@ function Contenido() {
     setFechaCargada("");
     const sb = supabase();
     let fallo = "";
-    const [datos, { data: av }, { data: nl }, inc] = await Promise.all([
+    const [datos, { data: av }, { data: nl }, inc, jus] = await Promise.all([
       leerTodo<Fila>((d, h) => sb.rpc("reporte_diario", { p_fecha: fecha }).range(d, h)),
       sb.from("avisos_padres").select("estudiante_id,motivo,detalle").eq("fecha", fecha).eq("avisado", true),
       sb.rpc("motivo_no_lectivo", { p_fecha: fecha }),
       leerTodo<{ estudiante_id: string; detalle: string }>(async (d, h) => {
         const r = await sb.from("incidencias_diarias").select("estudiante_id,detalle").eq("fecha", fecha)
+          .order("estudiante_id").range(d, h);
+        if (r.error) fallo = r.error.message;
+        return r;
+      }),
+      leerTodo<Justificacion & { estudiante_id: string }>(async (d, h) => {
+        const r = await sb.from("justificaciones").select("estudiante_id,tipo,motivo,informado_por").eq("fecha", fecha)
           .order("estudiante_id").range(d, h);
         if (r.error) fallo = r.error.message;
         return r;
@@ -91,6 +100,7 @@ function Contenido() {
     setAvisados(new Set((av ?? []).map((a) => `${a.estudiante_id}|${a.motivo}|${a.detalle}`)));
     setIncid(new Map(inc.map((x) => [x.estudiante_id, x.detalle])));
     setErrorIncid(fallo);
+    setJustif(new Map(jus.map((x) => [x.estudiante_id, x])));
     setFechaCargada(fecha);
     setCargando(false);
   }, [fecha]);
@@ -102,10 +112,11 @@ function Contenido() {
   const visibles = delNivel.filter((f) =>
     (!grado || String(f.grado) === grado) && (!seccion || f.seccion === seccion) &&
     sinTildes(`${f.apellidos} ${f.nombres}`).includes(sinTildes(q)));
+  const efectivo = (f: Fila) => estadoEfectivo(f.estado_colegio, justif.get(f.estudiante_id));
+  const cuenta = (e: string) => visibles.filter((f) => efectivo(f) === e).length;
   const resumen = {
-    puntual: visibles.filter((f) => f.estado_colegio === "puntual").length,
-    tardanza: visibles.filter((f) => f.estado_colegio === "tardanza").length,
-    falta: visibles.filter((f) => f.estado_colegio === "falta").length,
+    puntual: cuenta("puntual"), tardanza: cuenta("tardanza"), falta: cuenta("falta"),
+    tardanzaJ: cuenta("tardanza_justificada"), faltaJ: cuenta("falta_justificada"),
   };
 
   const items: Item[] = [];
@@ -134,7 +145,11 @@ function Contenido() {
       items.push({ fila: f, motivo: "sin_novedad", detalle: "", texto: "" });
   }
   const clave = (it: Item) => `${it.fila.estudiante_id}|${it.motivo}|${it.detalle}`;
-  const lista = items.filter((it) => !soloPend || (it.motivo !== "sin_novedad" && !avisados.has(clave(it))));
+  const justificado = (it: Item) =>
+    (it.motivo === "falta_colegio" || it.motivo === "tardanza_colegio") && efectivo(it.fila).endsWith("justificada") ||
+    (it.motivo.endsWith("_clase") && justif.has(it.fila.estudiante_id));
+  const lista = items.filter((it) =>
+    !soloPend || (it.motivo !== "sin_novedad" && !justificado(it) && !avisados.has(clave(it))));
   const filasPorAlumno = new Map<string, number>();
   for (const it of lista) filasPorAlumno.set(it.fila.estudiante_id, (filasPorAlumno.get(it.fila.estudiante_id) ?? 0) + 1);
 
@@ -186,26 +201,37 @@ function Contenido() {
   };
   const listo = !cargando && fechaCargada === fecha;
 
-  /** Descarga en Excel lo que se ve en pantalla (con los filtros aplicados). */
+  /** Descarga en Excel lo que se ve en pantalla: una fila por estudiante. */
   async function exportar() {
     const XLSX = await import("xlsx");
-    const datos = lista.map((it) => ({
-      Fecha: fecha,
-      Nivel: it.fila.nivel,
-      Grado: it.fila.grado,
-      Sección: it.fila.seccion,
-      Apellidos: it.fila.apellidos,
-      Nombres: it.fila.nombres,
-      Motivo: etiqueta[it.motivo],
-      Curso: it.detalle,
-      Observación: it.extra ?? "",
-      Apoderado: it.fila.apoderado ?? "",
-      Celular: it.fila.celular_apoderado ?? "",
-      "Avisado por WhatsApp": it.motivo === "sin_novedad" ? "" : avisados.has(clave(it)) ? "Sí" : "No",
-      Incidencia: incid.get(it.fila.estudiante_id) ?? "",
-    }));
+    const porAlumno = new Map<string, Item[]>();
+    for (const it of lista) porAlumno.set(it.fila.estudiante_id, [...(porAlumno.get(it.fila.estudiante_id) ?? []), it]);
+    const datos = [...porAlumno.values()].map((its) => {
+      const f = its[0].fila;
+      const avisables = its.filter((it) => it.motivo !== "sin_novedad");
+      const enviados = avisables.filter((it) => avisados.has(clave(it))).length;
+      return {
+        Fecha: fecha,
+        Nivel: f.nivel,
+        Grado: f.grado,
+        Sección: f.seccion,
+        Apellidos: f.apellidos,
+        Nombres: f.nombres,
+        "Estado en el colegio": NOMBRE_ESTADO[efectivo(f)],
+        "Hora de ingreso": f.hora_ingreso ? horaLima(new Date(f.hora_ingreso)) : "",
+        "Observaciones por curso": f.incidencias_aula.map((x) =>
+          `${x.curso}: ${x.estado === "tardanza" ? "tardanza"
+            : f.estado_colegio === "falta" ? "falta" : "ingresó al colegio pero no estuvo en el aula"}${x.obs ? ` - ${x.obs}` : ""}`
+        ).join(", "),
+        Justificación: textoJustificacion(justif.get(f.estudiante_id)),
+        Apoderado: f.apoderado ?? "",
+        Celular: f.celular_apoderado ?? "",
+        "Avisado por WhatsApp": !avisables.length ? "" : enviados === avisables.length ? "Sí" : enviados ? "Parcial" : "No",
+        Incidencia: incid.get(f.estudiante_id) ?? "",
+      };
+    });
     const hoja = XLSX.utils.json_to_sheet(datos);
-    hoja["!cols"] = [11, 11, 6, 8, 28, 28, 20, 28, 40, 24, 12, 20, 50].map((wch) => ({ wch }));
+    hoja["!cols"] = [11, 11, 6, 8, 28, 28, 22, 10, 60, 40, 24, 12, 14, 50].map((wch) => ({ wch }));
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, "Reporte diario");
     const partes = ["reporte", fecha, nivel, grado && `${grado}`, seccion].filter(Boolean);
@@ -257,10 +283,12 @@ function Contenido() {
         Fe y Alegría 17 — Reporte {fmtFecha(fecha)}{nivel && ` · ${nivel}`}{grado && ` ${grado}°`}{seccion && ` ${seccion}`}
       </p>
       {vista === "lista" && (
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
         <div className="bg-green-100 rounded p-3"><b className="text-2xl">{resumen.puntual}</b><br />Puntuales</div>
         <div className="bg-amber-100 rounded p-3"><b className="text-2xl">{resumen.tardanza}</b><br />Tardanzas</div>
         <div className="bg-red-100 rounded p-3"><b className="text-2xl">{resumen.falta}</b><br />Faltas</div>
+        <div className="bg-violet-100 rounded p-3"><b className="text-2xl">{resumen.tardanzaJ}</b><br />Tardanzas justificadas</div>
+        <div className="bg-blue-100 rounded p-3"><b className="text-2xl">{resumen.faltaJ}</b><br />Faltas justificadas</div>
       </div>
       )}
       {noLectivo && (
@@ -270,11 +298,13 @@ function Contenido() {
       )}
       {errorIncid && (
         <p className="bg-red-100 text-red-800 rounded p-3 mb-3 print:hidden">
-          No se pudieron leer las incidencias: {errorIncid}
+          No se pudieron leer las incidencias o justificaciones: {errorIncid}
         </p>
       )}
       {!listo && <p>Cargando…</p>}
-      {listo && vista === "estadisticas" && <Dashboard filas={visibles} incid={incid} />}
+      {listo && vista === "estadisticas" && (
+        <Dashboard filas={visibles.map((f) => ({ ...f, estado_colegio: efectivo(f) }))} incid={incid} />
+      )}
       {listo && vista === "lista" && (
         <div className="bg-white border rounded overflow-auto">
           <table className="w-full text-sm">
@@ -290,7 +320,8 @@ function Contenido() {
                   <tr key={clave(it)} className="border-b align-top">
                     <td className="p-2">{it.fila.apellidos}, {it.fila.nombres}</td>
                     <td className="capitalize">{it.fila.grado}° {it.fila.seccion} {it.fila.nivel}</td>
-                    <td>{etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
+                    <td>{(it.motivo === "falta_colegio" || it.motivo === "tardanza_colegio") && justificado(it)
+                        ? NOMBRE_ESTADO[efectivo(it.fila)] : etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
                       {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}
                       {it.motivo === "falta_colegio" && !noLectivo && (
                         <div className="my-1">
@@ -304,10 +335,21 @@ function Contenido() {
                           <button onClick={() => anular(it.fila)} className="ml-2 text-red-700 underline print:hidden">Anular</button>
                         </span>
                       )}
+                      {primera && (
+                        <Justificar key={`j|${fechaCargada}|${id}`} estudianteId={id} fecha={fechaCargada}
+                          tipoSugerido={it.fila.estado_colegio === "tardanza" ? "tardanza" : "falta"} actual={justif.get(id)}
+                          onCambio={(j) => setJustif((m) => {
+                            const nuevo = new Map(m);
+                            if (j) nuevo.set(id, j); else nuevo.delete(id);
+                            return nuevo;
+                          })} />
+                      )}
                     </td>
                     <td>{it.fila.apoderado}<br /><span className="text-gray-500">{it.fila.celular_apoderado}</span></td>
                     <td className="print:hidden">
-                      {it.motivo === "sin_novedad" ? null : it.fila.celular_apoderado ? (
+                      {it.motivo === "sin_novedad" ? null : justificado(it) ? (
+                        <span className="text-blue-700 text-xs font-semibold">Justificado</span>
+                      ) : it.fila.celular_apoderado ? (
                         <button onClick={() => avisar(it)}
                           className={`px-2 py-1 rounded text-white ${ya ? "bg-gray-400" : "bg-green-600"}`}>
                           {ya ? "Avisado ✓ (reenviar)" : "Avisar"}

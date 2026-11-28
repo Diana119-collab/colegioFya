@@ -1,8 +1,9 @@
 "use client";
+import { Estado, asistio } from "@/lib/estados";
 
 export type FilaDash = {
   estudiante_id: string; apellidos: string; nombres: string; nivel: string; grado: number; seccion: string;
-  estado_colegio: "puntual" | "tardanza" | "falta";
+  estado_colegio: Estado;
   incidencias_aula: { curso: string; estado: string }[];
 };
 
@@ -10,8 +11,11 @@ export type FilaDash = {
 const ESTADO = {
   puntual: { color: "#0ca30c", icono: "✓", nombre: "Puntual" },
   tardanza: { color: "#fab219", icono: "◷", nombre: "Tardanza" },
+  tardanza_justificada: { color: "#4a3aa7", icono: "◶", nombre: "Tardanza justificada" },
   falta: { color: "#d03b3b", icono: "✕", nombre: "Falta" },
+  falta_justificada: { color: "#2a78d6", icono: "✎", nombre: "Falta justificada" },
 } as const;
+const ORDEN = ["puntual", "tardanza", "tardanza_justificada", "falta", "falta_justificada"] as const;
 const AZUL = "#2a78d6";
 const GRIS = "#e5e4e0";
 const imprimirColor = { WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" } as const;
@@ -95,18 +99,18 @@ export default function Dashboard({ filas, incid }: { filas: FilaDash[]; incid: 
   const n = (cond: (f: FilaDash) => boolean) => filas.filter(cond).length;
   const faltoClase = (f: FilaDash) => f.incidencias_aula.some((i) => i.estado === "falta");
   const tardeClase = (f: FilaDash) => f.incidencias_aula.some((i) => i.estado === "tardanza");
-  const vino = (f: FilaDash) => f.estado_colegio !== "falta";
+  const vino = (f: FilaDash) => asistio(f.estado_colegio);
 
-  const puntual = n((f) => f.estado_colegio === "puntual");
-  const tardanza = n((f) => f.estado_colegio === "tardanza");
-  const falta = n((f) => f.estado_colegio === "falta");
-  const vinieron = puntual + tardanza;
+  const de = (e: Estado) => n((f) => f.estado_colegio === e);
+  const falta = de("falta");
+  const faltaJ = de("falta_justificada");
+  const tardanza = de("tardanza");
+  const tardanzaJ = de("tardanza_justificada");
+  const vinieron = n(vino);
   const escapados = n((f) => vino(f) && faltoClase(f));
   const conIncid = n((f) => incid.has(f.estudiante_id));
 
-  const general: (Parte & { icono: string })[] = (["puntual", "tardanza", "falta"] as const).map((k) => ({
-    ...ESTADO[k], valor: { puntual, tardanza, falta }[k],
-  }));
+  const general: (Parte & { icono: string })[] = ORDEN.map((k) => ({ ...ESTADO[k], valor: de(k) }));
 
   // De los que ingresaron: qué pasó en sus clases (cada alumno cuenta una sola vez)
   const enAula: Parte[] = [
@@ -118,6 +122,8 @@ export default function Dashboard({ filas, incid }: { filas: FilaDash[]; incid: 
   const motivos = [
     { nombre: "Falta al colegio", valor: falta },
     { nombre: "Tardanza al colegio", valor: tardanza },
+    { nombre: "Falta justificada", valor: faltaJ },
+    { nombre: "Tardanza justificada", valor: tardanzaJ },
     { nombre: "Ingresó, pero faltó a clase", valor: escapados },
     { nombre: "Tardanza en clase", valor: n(tardeClase) },
   ];
@@ -150,7 +156,7 @@ export default function Dashboard({ filas, incid }: { filas: FilaDash[]; incid: 
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Cifra titulo="Asistencia al colegio" valor={`${pct(vinieron, total)}%`} nota={`${vinieron} de ${total} estudiantes`} />
-        <Cifra titulo="Inasistencia" valor={`${pct(falta, total)}%`} nota={`${falta} no ingresaron`} />
+        <Cifra titulo="Inasistencia" valor={`${pct(falta + faltaJ, total)}%`} nota={`${falta} sin justificar · ${faltaJ} justificadas`} />
         <Cifra titulo="Ingresaron pero faltaron a clase" valor={escapados} nota={`${pct(escapados, vinieron)}% de los que ingresaron`} />
         <Cifra titulo="Con incidencia anotada" valor={`${pct(conIncid, total)}%`} nota={`${conIncid} con incidencia · ${total - conIncid} sin incidencia`} />
       </div>
@@ -174,21 +180,20 @@ export default function Dashboard({ filas, incid }: { filas: FilaDash[]; incid: 
           <div className="overflow-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left border-b text-gray-600">
-                <th className="py-1">Aula</th><th className="w-2/5">Puntual · Tardanza · Falta</th>
-                <th className="text-right">Puntual</th><th className="text-right">Tarde</th><th className="text-right">Falta</th>
-                <th className="text-right">Asistencia</th></tr></thead>
+                <th className="py-1">Aula</th><th className="w-1/3">Distribución</th>
+                {ORDEN.map((k) => <th key={k} className="text-right pl-2" title={ESTADO[k].nombre}>
+                  {{ puntual: "Puntual", tardanza: "Tarde", tardanza_justificada: "T. just.", falta: "Falta", falta_justificada: "F. just." }[k]}
+                </th>)}
+                <th className="text-right pl-2">Asistencia</th></tr></thead>
               <tbody>
                 {[...aulas.values()].sort((a, b) => a.orden.localeCompare(b.orden, "es", { numeric: true })).map((a) => {
-                  const c = (k: string) => a.filas.filter((f) => f.estado_colegio === k).length;
-                  const partes = (["puntual", "tardanza", "falta"] as const).map((k) => ({ ...ESTADO[k], valor: c(k) }));
+                  const c = (k: Estado) => a.filas.filter((f) => f.estado_colegio === k).length;
                   return (
                     <tr key={a.orden} className="border-b">
                       <td className="py-1.5 capitalize whitespace-nowrap pr-3">{a.etiqueta}</td>
-                      <td className="pr-3"><Apilada partes={partes} /></td>
-                      <td className="text-right tabular-nums">{c("puntual")}</td>
-                      <td className="text-right tabular-nums">{c("tardanza")}</td>
-                      <td className="text-right tabular-nums">{c("falta")}</td>
-                      <td className="text-right tabular-nums font-semibold">{pct(c("puntual") + c("tardanza"), a.filas.length)}%</td>
+                      <td className="pr-3"><Apilada partes={ORDEN.map((k) => ({ ...ESTADO[k], valor: c(k) }))} /></td>
+                      {ORDEN.map((k) => <td key={k} className="text-right tabular-nums pl-2">{c(k)}</td>)}
+                      <td className="text-right tabular-nums font-semibold pl-2">{pct(a.filas.filter(vino).length, a.filas.length)}%</td>
                     </tr>
                   );
                 })}

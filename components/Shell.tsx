@@ -10,6 +10,7 @@ export const usePerfil = () => useContext(Ctx)!;
 const MENU: { href: string; label: string; roles: Rol[] }[] = [
   { href: "/escaner", label: "Escanear QR", roles: ["auxiliar", "admin"] },
   { href: "/reporte", label: "Reporte diario", roles: ["auxiliar", "admin"] },
+  { href: "/periodo", label: "Reporte por periodo", roles: ["auxiliar", "admin"] },
   { href: "/aula", label: "Mi aula", roles: ["profesor", "admin"] },
   { href: "/mi-reporte", label: "Reporte de mi clase", roles: ["profesor", "admin"] },
   { href: "/admin/estudiantes", label: "Estudiantes", roles: ["admin", "auxiliar"] },
