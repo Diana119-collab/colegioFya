@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePerfil } from "@/components/Shell";
+import Dashboard from "@/components/Dashboard";
 import { supabase, hoyLima, waLink } from "@/lib/supabase";
 import { leerTodo } from "@/lib/ept";
 
@@ -63,6 +64,7 @@ function Contenido() {
   const [cargando, setCargando] = useState(false);
   const [noLectivo, setNoLectivo] = useState<string | null>(null);
   const [errorIncid, setErrorIncid] = useState("");
+  const [vista, setVista] = useState<"estadisticas" | "lista">("estadisticas");
   const pedido = useRef(0);
 
   const cargar = useCallback(async () => {
@@ -169,13 +171,49 @@ function Contenido() {
   };
   const listo = !cargando && fechaCargada === fecha;
 
+  /** Descarga en Excel lo que se ve en pantalla (con los filtros aplicados). */
+  async function exportar() {
+    const XLSX = await import("xlsx");
+    const datos = lista.map((it) => ({
+      Fecha: fecha,
+      Nivel: it.fila.nivel,
+      Grado: it.fila.grado,
+      Sección: it.fila.seccion,
+      Apellidos: it.fila.apellidos,
+      Nombres: it.fila.nombres,
+      Motivo: etiqueta[it.motivo],
+      Curso: it.detalle,
+      Observación: it.extra ?? "",
+      Apoderado: it.fila.apoderado ?? "",
+      Celular: it.fila.celular_apoderado ?? "",
+      "Avisado por WhatsApp": it.motivo === "sin_novedad" ? "" : avisados.has(clave(it)) ? "Sí" : "No",
+      Incidencia: incid.get(it.fila.estudiante_id) ?? "",
+    }));
+    const hoja = XLSX.utils.json_to_sheet(datos);
+    hoja["!cols"] = [11, 11, 6, 8, 28, 28, 20, 28, 40, 24, 12, 20, 50].map((wch) => ({ wch }));
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Reporte diario");
+    const partes = ["reporte", fecha, nivel, grado && `${grado}`, seccion].filter(Boolean);
+    XLSX.writeFile(libro, `${partes.join("_")}.xlsx`);
+  }
+
   return (
     <>
       <div className="flex flex-wrap items-center gap-3 mb-3 print:hidden">
         <h2 className="text-2xl font-bold mr-auto">Reporte diario</h2>
         <input type="date" className="border rounded p-2" value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <button onClick={cargar} className="border rounded px-3 py-2 bg-white">Actualizar</button>
+        <button onClick={exportar} disabled={!listo || lista.length === 0}
+          className="bg-green-700 text-white rounded px-3 py-2 disabled:opacity-40">Exportar Excel</button>
         <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
+      </div>
+      <div className="flex gap-1 border-b mb-3 print:hidden">
+        {([["estadisticas", "Estadísticas"], ["lista", "Lista y avisos"]] as const).map(([k, t]) => (
+          <button key={k} onClick={() => setVista(k)}
+            className={`px-4 py-2 -mb-px border-b-2 ${vista === k ? "border-red-700 text-red-700 font-semibold" : "border-transparent text-gray-600"}`}>
+            {t}
+          </button>
+        ))}
       </div>
       <div className="flex flex-wrap items-center gap-3 mb-4 print:hidden">
         <select className="border rounded p-2" value={nivel}
@@ -195,17 +233,21 @@ function Contenido() {
           {secciones.map((x) => <option key={x} value={x}>Sección {x}</option>)}
         </select>
         <input className="border rounded p-2 w-full max-w-xs" placeholder="Buscar por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
+        {vista === "lista" && <>
         <label className="text-sm"><input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo avisos pendientes</label>
         <label className="text-sm"><input type="checkbox" checked={todos} onChange={(e) => setTodos(e.target.checked)} /> Incluir puntuales</label>
+        </>}
       </div>
       <p className="hidden print:block font-bold">
         Fe y Alegría 17 — Reporte {fmtFecha(fecha)}{nivel && ` · ${nivel}`}{grado && ` ${grado}°`}{seccion && ` ${seccion}`}
       </p>
+      {vista === "lista" && (
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="bg-green-100 rounded p-3"><b className="text-2xl">{resumen.puntual}</b><br />Puntuales</div>
         <div className="bg-amber-100 rounded p-3"><b className="text-2xl">{resumen.tardanza}</b><br />Tardanzas</div>
         <div className="bg-red-100 rounded p-3"><b className="text-2xl">{resumen.falta}</b><br />Faltas</div>
       </div>
+      )}
       {noLectivo && (
         <p className="bg-blue-100 text-blue-800 rounded p-3 mb-3">
           Día no lectivo ({noLectivo}): no se registran faltas.
@@ -217,7 +259,8 @@ function Contenido() {
         </p>
       )}
       {!listo && <p>Cargando…</p>}
-      {listo && (
+      {listo && vista === "estadisticas" && <Dashboard filas={visibles} incid={incid} />}
+      {listo && vista === "lista" && (
         <div className="bg-white border rounded overflow-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left border-b">
