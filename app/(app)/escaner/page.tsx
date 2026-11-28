@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { RegistroManual } from "@/components/Ingreso";
 
 type Res = { ok: boolean; error?: string; repetido?: boolean; estado?: string; nombre?: string; aula?: string };
 
@@ -65,6 +66,12 @@ function Contenido() {
               value={manual} onChange={(e) => setManual(e.target.value)} />
             <button className="bg-red-700 text-white px-3 rounded">OK</button>
           </form>
+          <div className="mt-4">
+            <RegistroManual onRegistrado={(nombre, aula, i) => {
+              setUlt({ ok: true, nombre, aula, estado: i.estado });
+              setHist((h) => [{ ok: true, nombre, aula, estado: i.estado, hora: new Date().toLocaleTimeString("es-PE") }, ...h].slice(0, 30));
+            }} />
+          </div>
         </div>
         <div>
           <div className={`rounded p-4 mb-4 ${color}`}>

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePerfil } from "@/components/Shell";
 import Dashboard from "@/components/Dashboard";
+import { IngresoDesplegable, Ingreso, horaLima } from "@/components/Ingreso";
 import { supabase, hoyLima, waLink } from "@/lib/supabase";
 import { leerTodo } from "@/lib/ept";
 
@@ -64,7 +65,7 @@ function Contenido() {
   const [cargando, setCargando] = useState(false);
   const [noLectivo, setNoLectivo] = useState<string | null>(null);
   const [errorIncid, setErrorIncid] = useState("");
-  const [vista, setVista] = useState<"estadisticas" | "lista">("estadisticas");
+  const [vista, setVista] = useState<"lista" | "estadisticas">("lista");
   const pedido = useRef(0);
 
   const cargar = useCallback(async () => {
@@ -165,6 +166,20 @@ function Contenido() {
     return null;
   }
 
+  /** Refleja en pantalla un ingreso registrado o anulado, sin recargar (no se pierde lo escrito). */
+  function actualizarIngreso(estudianteId: string, i: Ingreso | null) {
+    setFilas((fs) => fs.map((f) => f.estudiante_id === estudianteId
+      ? { ...f, estado_colegio: i?.estado ?? "falta", hora_ingreso: i?.hora ?? null } : f));
+  }
+
+  async function anular(f: Fila) {
+    if (!confirm(`¿Anular el ingreso de ${f.apellidos}, ${f.nombres}? Quedará como falta.`)) return;
+    const { error } = await supabase().from("asistencia_colegio").delete()
+      .eq("estudiante_id", f.estudiante_id).eq("fecha", fecha);
+    if (error) return alert(error.message);
+    actualizarIngreso(f.estudiante_id, null);
+  }
+
   const etiqueta: Record<string, string> = {
     falta_colegio: "Falta al colegio", tardanza_colegio: "Tardanza al colegio",
     falta_clase: "Falta en clase", tardanza_clase: "Tardanza en clase", sin_novedad: "Asistió puntual",
@@ -208,7 +223,7 @@ function Contenido() {
         <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
       </div>
       <div className="flex gap-1 border-b mb-3 print:hidden">
-        {([["estadisticas", "Estadísticas"], ["lista", "Lista y avisos"]] as const).map(([k, t]) => (
+        {([["lista", "Lista de Estudiantes"], ["estadisticas", "Estadísticas"]] as const).map(([k, t]) => (
           <button key={k} onClick={() => setVista(k)}
             className={`px-4 py-2 -mb-px border-b-2 ${vista === k ? "border-red-700 text-red-700 font-semibold" : "border-transparent text-gray-600"}`}>
             {t}
@@ -276,7 +291,20 @@ function Contenido() {
                     <td className="p-2">{it.fila.apellidos}, {it.fila.nombres}</td>
                     <td className="capitalize">{it.fila.grado}° {it.fila.seccion} {it.fila.nivel}</td>
                     <td>{etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
-                      {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}</td>
+                      {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}
+                      {it.motivo === "falta_colegio" && !noLectivo && (
+                        <div className="my-1">
+                          <IngresoDesplegable key={`${fechaCargada}|${id}`} estudianteId={id} fecha={fechaCargada}
+                            onListo={(ing) => actualizarIngreso(id, ing)} />
+                        </div>
+                      )}
+                      {(it.motivo === "tardanza_colegio" || it.motivo === "sin_novedad") && it.fila.hora_ingreso && (
+                        <span className="block text-xs text-gray-500">
+                          Ingreso {horaLima(new Date(it.fila.hora_ingreso))}
+                          <button onClick={() => anular(it.fila)} className="ml-2 text-red-700 underline print:hidden">Anular</button>
+                        </span>
+                      )}
+                    </td>
                     <td>{it.fila.apoderado}<br /><span className="text-gray-500">{it.fila.celular_apoderado}</span></td>
                     <td className="print:hidden">
                       {it.motivo === "sin_novedad" ? null : it.fila.celular_apoderado ? (
