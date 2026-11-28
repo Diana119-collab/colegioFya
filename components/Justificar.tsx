@@ -58,9 +58,9 @@ export default function Justificar({ estudianteId, fecha, tipoSugerido, actual, 
     <div className="my-1">
       {actual && <p className="text-xs text-blue-800">📝 {textoJustificacion(actual)}</p>}
       {!abierto ? (
-        <p className="text-xs print:hidden">
-          <button type="button" onClick={abrir} className="text-blue-700 underline mr-2">{actual ? "Editar" : "Justificar"}</button>
-          {actual && <button type="button" onClick={quitar} className="text-red-700 underline">Quitar</button>}
+        <p className="text-xs print:hidden flex gap-1 mt-1">
+          <button type="button" onClick={abrir} className="bg-blue-50 text-blue-700 px-2.5 py-1 font-medium">{actual ? "Editar" : "Justificar"}</button>
+          {actual && <button type="button" onClick={quitar} className="bg-red-50 text-red-700 px-2.5 py-1 font-medium">Quitar</button>}
         </p>
       ) : (
         <div className="bg-blue-50 border border-blue-200 rounded p-2 grid gap-1 max-w-xs print:hidden">

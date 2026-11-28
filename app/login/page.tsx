@@ -23,8 +23,10 @@ export default function Login() {
     <div className="min-h-screen grid place-items-center bg-red-700 bg-cover bg-center p-4"
       style={{ backgroundImage: "linear-gradient(rgba(60,10,10,.35), rgba(60,10,10,.55)), url('/colegio.jpg')" }}>
       <form onSubmit={entrar} className="bg-white/95 shadow-xl rounded-lg p-6 w-full max-w-sm space-y-3">
-        <h1 className="text-xl font-bold text-red-700">Fe y Alegría 17</h1>
-        <p className="text-sm text-gray-500">Villa El Salvador · Sistema de asistencia</p>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="Logo Fe y Alegría 17" className="w-28 h-28 mx-auto object-contain" />
+        <h1 className="text-xl font-bold text-red-700 text-center">Fe y Alegría 17</h1>
+        <p className="text-sm text-gray-500 text-center">Villa El Salvador · Sistema de asistencia</p>
         <input className="border rounded w-full p-2" type="email" placeholder="Correo" value={email}
           onChange={(e) => setEmail(e.target.value)} required />
         <input className="border rounded w-full p-2" type="password" placeholder="Contraseña" value={password}

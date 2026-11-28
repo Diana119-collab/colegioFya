@@ -25,6 +25,8 @@ const BIMESTRES = [
 ];
 const ESTADOS: Estado[] = ["puntual", "tardanza", "tardanza_justificada", "falta", "falta_justificada"];
 
+const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 const fecha = (f: string) => new Date(f + "T12:00:00Z");
 const corta = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
@@ -65,6 +67,8 @@ export default function Periodo() {
   const [q, setQ] = useState("");
   const [informe, setInforme] = useState<Informe | null>(null);
   const [abierto, setAbierto] = useState("");
+  const [sel, setSel] = useState<Set<string>>(new Set());   // estudiantes marcados
+  const [soloSel, setSoloSel] = useState(false);            // ver el reporte solo de los marcados
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const pedido = useRef(0);
@@ -85,7 +89,7 @@ export default function Periodo() {
     if (!nivel || !grado) return setMsg("Elige el nivel y el grado");
     if (!desde || !hasta || desde > hasta) return setMsg("Revisa las fechas");
     const n = ++pedido.current;
-    setBusy(true); setMsg(""); setInforme(null); setAbierto("");
+    setBusy(true); setMsg(""); setInforme(null); setAbierto(""); setSel(new Set()); setSoloSel(false);
     try {
       const sb = supabase();
       const fin = hasta > hoy ? hoy : hasta;
@@ -172,24 +176,34 @@ export default function Periodo() {
     }
   }
 
-  const visibles = (informe?.filas ?? []).filter((r) =>
-    (!seccion || r.alumno.seccion_id === seccion) &&
-    sinTildes(`${r.alumno.apellidos} ${r.alumno.nombres}`).includes(sinTildes(q)));
-  const suma = (f: (r: Resumen) => number) => visibles.reduce((t, r) => t + f(r), 0);
-  const posibles = visibles.length * (informe?.lectivos ?? 0);
+  const delAula = (informe?.filas ?? []).filter((r) => !seccion || r.alumno.seccion_id === seccion);
+  const marcados = delAula.filter((r) => sel.has(r.alumno.id));
+  const viendoSel = soloSel && marcados.length > 0;
+  const visibles = viendoSel ? marcados
+    : delAula.filter((r) => sinTildes(`${r.alumno.apellidos} ${r.alumno.nombres}`).includes(sinTildes(q)));
+  const elegidos = marcados.length ? marcados : visibles;    // lo que se totaliza y exporta
+  const todosMarcados = visibles.length > 0 && visibles.every((r) => sel.has(r.alumno.id));
+  const marcar = (ids: string[], si: boolean) => {
+    const nuevo = new Set(sel);
+    ids.forEach((id) => (si ? nuevo.add(id) : nuevo.delete(id)));
+    setSel(nuevo);
+    if (!nuevo.size) setSoloSel(false);
+  };
+  const suma = (f: (r: Resumen) => number) => elegidos.reduce((t, r) => t + f(r), 0);
+  const posibles = elegidos.length * (informe?.lectivos ?? 0);
   const asistencias = suma((r) => r.dias.filter((d) => asistio(d.estado)).length);
 
   async function exportar() {
     if (!informe) return;
     const XLSX = await import("xlsx");
-    const resumen = visibles.map((r) => ({
+    const resumen = elegidos.map((r) => ({
       Aula: r.aula, Apellidos: r.alumno.apellidos, Nombres: r.alumno.nombres, "Días lectivos": informe.lectivos,
       ...Object.fromEntries(ESTADOS.map((e) => [NOMBRE_ESTADO[e], r.cuenta[e]])),
       "Faltas en clase": r.faltasClase, "Tardanzas en clase": r.tardanzasClase,
       "% Asistencia": r.asistencia, "Días con incidencia": r.incidencias,
       "Observaciones e incidencias": observaciones(r),
     }));
-    const detalle = visibles.flatMap((r) => r.dias.map((d) => ({
+    const detalle = elegidos.flatMap((r) => r.dias.map((d) => ({
       Fecha: d.fecha, Aula: r.aula, Apellidos: r.alumno.apellidos, Nombres: r.alumno.nombres,
       Estado: NOMBRE_ESTADO[d.estado], "Hora de ingreso": d.hora, "Observaciones por curso": d.cursos,
       Justificación: d.justificacion, Incidencia: d.incidencia,
@@ -201,7 +215,9 @@ export default function Periodo() {
     h2["!cols"] = [11, 8, 28, 28, 20, 14, 50, 40, 50].map((wch) => ({ wch }));
     XLSX.utils.book_append_sheet(libro, h1, "Resumen");
     XLSX.utils.book_append_sheet(libro, h2, "Detalle diario");
-    XLSX.writeFile(libro, `asistencia_${tipo}_${grado}_${nivel}_${desde}_${hasta}.xlsx`);
+    const quien = marcados.length === 1 ? `_${marcados[0].alumno.apellidos.replace(/\s+/g, "-")}`
+      : marcados.length ? `_${marcados.length}-estudiantes` : "";
+    XLSX.writeFile(libro, `asistencia_${tipo}_${grado}_${nivel}_${desde}_${hasta}${quien}.xlsx`);
   }
 
   const inp = "border rounded p-2 disabled:opacity-40";
@@ -220,9 +236,17 @@ export default function Periodo() {
           </select>
         </label>
         {tipo === "semana" && <label className="text-sm">Un día de la semana<br />
-          <input type="date" className={inp} value={dia} onChange={(e) => e.target.value && setDia(e.target.value)} /></label>}
-        {tipo === "mes" && <label className="text-sm">Mes<br />
-          <input type="month" className={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>}
+          <input type="date" className={inp} value={dia} onChange={(e) => /^\d{4}-\d{2}-\d{2}$/.test(e.target.value) && setDia(e.target.value)} /></label>}
+        {tipo === "mes" && <>
+          <label className="text-sm">Mes<br />
+            <select className={inp} value={mes.slice(5, 7)} onChange={(e) => setMes(`${mes.slice(0, 4)}-${e.target.value}`)}>
+              {MESES.map((m, i) => <option key={m} value={String(i + 1).padStart(2, "0")}>{m}</option>)}
+            </select></label>
+          <label className="text-sm">Año<br />
+            <select className={inp} value={mes.slice(0, 4)} onChange={(e) => setMes(`${e.target.value}-${mes.slice(5, 7)}`)}>
+              {[0, 1, 2, 3].map((n) => String(Number(anio) - n)).map((a) => <option key={a} value={a}>{a}</option>)}
+            </select></label>
+        </>}
         {tipo === "bimestre" && <label className="text-sm">Bimestre<br />
           <select className={inp} value={bim} onChange={(e) => {
             const i = Number(e.target.value);
@@ -259,9 +283,23 @@ export default function Periodo() {
         <>
           <div className="flex flex-wrap gap-3 items-center mb-3">
             <h3 className="font-semibold mr-auto">Fe y Alegría 17 — {informe.titulo}</h3>
-            <input className="border rounded p-2 print:hidden" placeholder="Buscar estudiante" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button onClick={exportar} disabled={!visibles.length} className="bg-green-700 text-white rounded px-3 py-2 disabled:opacity-40 print:hidden">Exportar Excel</button>
-            <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2 print:hidden">Imprimir</button>
+            <input className="border rounded p-2 print:hidden disabled:opacity-40" placeholder="Buscar estudiante" disabled={viendoSel} value={q} onChange={(e) => setQ(e.target.value)} />
+            <button onClick={exportar} disabled={!elegidos.length} className="bg-green-700 text-white rounded px-3 py-2 disabled:opacity-40 print:hidden">{marcados.length ? `Exportar Excel (${marcados.length})` : "Exportar Excel"}</button>
+            <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2 print:hidden">{viendoSel ? `Imprimir (${marcados.length})` : "Imprimir"}</button>
+          </div>
+          <div className={`flex flex-wrap items-center gap-3 rounded-xl p-3 mb-3 text-sm print:hidden ${
+            marcados.length ? "bg-blue-50 border border-blue-200" : "bg-slate-100"}`}>
+            {marcados.length === 0 ? (
+              <span className="text-gray-600">Marca las casillas para generar el reporte solo de esos estudiantes.</span>
+            ) : (
+              <>
+                <b className="mr-auto">{marcados.length} estudiante(s) seleccionado(s)</b>
+                <button onClick={() => setSoloSel(!viendoSel)} className="bg-blue-700 text-white px-3 py-1.5 font-semibold">
+                  {viendoSel ? "Volver a la lista" : "Generar reporte de seleccionados"}
+                </button>
+                <button onClick={() => { setSel(new Set()); setSoloSel(false); }} className="bg-white border px-3 py-1.5">Quitar selección</button>
+              </>
+            )}
           </div>
           <p className="text-sm text-gray-600 mb-3">
             Días lectivos contados: <b>{informe.lectivos}</b>
@@ -278,18 +316,26 @@ export default function Periodo() {
           <div className="bg-white border rounded overflow-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left border-b">
-                <th className="p-2">Estudiante</th><th>Aula</th>
+                <th className="p-2">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" className="print:hidden" aria-label="Seleccionar todos" checked={todosMarcados}
+                      onChange={(e) => marcar(visibles.map((r) => r.alumno.id), e.target.checked)} />
+                    Estudiante
+                  </label>
+                </th><th>Aula</th>
                 {["Puntual", "Tarde", "T. just.", "Falta", "F. just.", "Faltas clase", "Tard. clase", "% Asist.", "Incid."]
                   .map((t) => <th key={t} className="text-right px-2">{t}</th>)}
               </tr></thead>
               <tbody>
                 {visibles.map((r) => {
-                  const ver = abierto === r.alumno.id;
+                  const ver = viendoSel || abierto === r.alumno.id;   // en el reporte de seleccionados se ve todo el detalle
                   const novedades = r.dias.filter((d) => d.estado !== "puntual" || d.cursos || d.justificacion || d.incidencia);
                   return (
                     <Fragment key={r.alumno.id}>
-                      <tr className="border-b">
+                      <tr className={`border-b ${sel.has(r.alumno.id) ? "bg-blue-50" : ""}`}>
                         <td className="p-2">
+                          <input type="checkbox" className="mr-2 print:hidden" aria-label={`Seleccionar a ${r.alumno.apellidos}, ${r.alumno.nombres}`}
+                            checked={sel.has(r.alumno.id)} onChange={(e) => marcar([r.alumno.id], e.target.checked)} />
                           <button className="text-left hover:underline" aria-expanded={ver} onClick={() => setAbierto(ver ? "" : r.alumno.id)}>
                             <span className="print:hidden">{ver ? "▾ " : "▸ "}</span>{r.alumno.apellidos}, {r.alumno.nombres}
                           </button>

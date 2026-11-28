@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePerfil } from "@/components/Shell";
+import Icono, { NombreIcono } from "@/components/Icono";
 import Dashboard from "@/components/Dashboard";
 import { IngresoDesplegable, Ingreso, horaLima } from "@/components/Ingreso";
 import { supabase, hoyLima, waLink } from "@/lib/supabase";
@@ -18,6 +19,14 @@ type Item = { fila: Fila; motivo: string; detalle: string; texto: string; extra?
 
 const fmtFecha = (f: string) =>
   new Date(f + "T12:00:00").toLocaleDateString("es-PE", { weekday: "long", day: "numeric", month: "long" });
+
+const ESTILO: Record<string, { chip: string; icono: NombreIcono }> = {
+  puntual: { chip: "bg-green-100 text-green-800", icono: "check" },
+  tardanza: { chip: "bg-amber-100 text-amber-800", icono: "reloj" },
+  falta: { chip: "bg-red-100 text-red-800", icono: "x" },
+  tardanza_justificada: { chip: "bg-violet-100 text-violet-800", icono: "nota" },
+  falta_justificada: { chip: "bg-blue-100 text-blue-800", icono: "nota" },
+};
 
 const sinTildes = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
@@ -63,7 +72,7 @@ function Contenido() {
   const [seccion, setSeccion] = useState("");
   const [q, setQ] = useState("");
   const [soloPend, setSoloPend] = useState(false);
-  const [todos, setTodos] = useState(false);
+  const [todos, setTodos] = useState(true);   // "Incluir puntuales" activo por defecto
   const [cargando, setCargando] = useState(false);
   const [noLectivo, setNoLectivo] = useState<string | null>(null);
   const [errorIncid, setErrorIncid] = useState("");
@@ -248,11 +257,11 @@ function Contenido() {
           className="bg-green-700 text-white rounded px-3 py-2 disabled:opacity-40">Exportar Excel</button>
         <button onClick={() => window.print()} className="bg-red-700 text-white rounded px-3 py-2">Imprimir</button>
       </div>
-      <div className="flex gap-1 border-b mb-3 print:hidden">
-        {([["lista", "Lista de Estudiantes"], ["estadisticas", "Estadísticas"]] as const).map(([k, t]) => (
-          <button key={k} onClick={() => setVista(k)}
-            className={`px-4 py-2 -mb-px border-b-2 ${vista === k ? "border-red-700 text-red-700 font-semibold" : "border-transparent text-gray-600"}`}>
-            {t}
+      <div className="inline-flex gap-1 rounded-2xl bg-slate-200/70 p-1 mb-4 print:hidden">
+        {([["lista", "Lista de Estudiantes", "personas"], ["estadisticas", "Estadísticas", "grafica"]] as const).map(([k, t, ic]) => (
+          <button key={k} onClick={() => setVista(k)} aria-pressed={vista === k}
+            className={`flex items-center gap-2 px-4 py-2 text-sm ${vista === k ? "bg-white text-red-700 font-semibold shadow" : "text-gray-600"}`}>
+            <Icono nombre={ic} className="w-4 h-4" />{t}
           </button>
         ))}
       </div>
@@ -283,12 +292,20 @@ function Contenido() {
         Fe y Alegría 17 — Reporte {fmtFecha(fecha)}{nivel && ` · ${nivel}`}{grado && ` ${grado}°`}{seccion && ` ${seccion}`}
       </p>
       {vista === "lista" && (
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        <div className="bg-green-100 rounded p-3"><b className="text-2xl">{resumen.puntual}</b><br />Puntuales</div>
-        <div className="bg-amber-100 rounded p-3"><b className="text-2xl">{resumen.tardanza}</b><br />Tardanzas</div>
-        <div className="bg-red-100 rounded p-3"><b className="text-2xl">{resumen.falta}</b><br />Faltas</div>
-        <div className="bg-violet-100 rounded p-3"><b className="text-2xl">{resumen.tardanzaJ}</b><br />Tardanzas justificadas</div>
-        <div className="bg-blue-100 rounded p-3"><b className="text-2xl">{resumen.faltaJ}</b><br />Faltas justificadas</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 mb-4">
+        {([["Puntuales", resumen.puntual, "puntual"], ["Tardanzas", resumen.tardanza, "tardanza"], ["Faltas", resumen.falta, "falta"],
+          ["Tardanzas justificadas", resumen.tardanzaJ, "tardanza_justificada"],
+          ["Faltas justificadas", resumen.faltaJ, "falta_justificada"]] as const).map(([t, v, e]) => (
+          <div key={e} className="bg-white border rounded p-4 flex items-center gap-3 transition hover:-translate-y-0.5">
+            <span className={`grid place-items-center w-11 h-11 rounded-xl shrink-0 ${ESTILO[e].chip}`}>
+              <Icono nombre={ESTILO[e].icono} />
+            </span>
+            <div>
+              <p className="text-2xl font-bold leading-none tabular-nums">{v}</p>
+              <p className="text-xs text-gray-500 mt-1">{t}</p>
+            </div>
+          </div>
+        ))}
       </div>
       )}
       {noLectivo && (
@@ -318,10 +335,27 @@ function Contenido() {
                 const primera = lista[i - 1]?.fila.estudiante_id !== id;   // una sola caja por estudiante
                 return (
                   <tr key={clave(it)} className="border-b align-top">
-                    <td className="p-2">{it.fila.apellidos}, {it.fila.nombres}</td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-3">
+                        <span className={`hidden sm:grid place-items-center w-9 h-9 rounded-full text-xs font-bold shrink-0 print:hidden ${ESTILO[efectivo(it.fila)].chip}`}>
+                          {it.fila.apellidos.slice(0, 1)}{it.fila.nombres.slice(0, 1)}
+                        </span>
+                        <span className="font-medium">{it.fila.apellidos}, {it.fila.nombres}</span>
+                      </div>
+                    </td>
                     <td className="capitalize">{it.fila.grado}° {it.fila.seccion} {it.fila.nivel}</td>
-                    <td>{(it.motivo === "falta_colegio" || it.motivo === "tardanza_colegio") && justificado(it)
-                        ? NOMBRE_ESTADO[efectivo(it.fila)] : etiqueta[it.motivo]}{it.detalle && `: ${it.detalle}`}
+                    <td className="py-3 pr-3">
+                      {(() => {
+                        const colegio = !it.motivo.endsWith("_clase");
+                        const e = colegio ? efectivo(it.fila) : it.motivo === "falta_clase" ? "falta" : "tardanza";
+                        return (
+                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${ESTILO[e].chip}`}>
+                            <Icono nombre={ESTILO[e].icono} className="w-3.5 h-3.5" />
+                            {colegio && e.endsWith("justificada") ? NOMBRE_ESTADO[efectivo(it.fila)] : etiqueta[it.motivo]}
+                            {it.detalle && `: ${it.detalle}`}
+                          </span>
+                        );
+                      })()}
                       {it.extra && <span className="block text-xs text-red-700 font-semibold">⚠ {it.extra}</span>}
                       {it.motivo === "falta_colegio" && !noLectivo && (
                         <div className="my-1">
@@ -332,10 +366,10 @@ function Contenido() {
                       {(it.motivo === "tardanza_colegio" || it.motivo === "sin_novedad") && it.fila.hora_ingreso && (
                         <span className="block text-xs text-gray-500">
                           Ingreso {horaLima(new Date(it.fila.hora_ingreso))}
-                          <button onClick={() => anular(it.fila)} className="ml-2 text-red-700 underline print:hidden">Anular</button>
+                          <button onClick={() => anular(it.fila)} className="ml-2 bg-red-50 text-red-700 px-2 py-0.5 font-medium print:hidden">Anular</button>
                         </span>
                       )}
-                      {primera && (
+                      {primera && (it.fila.estado_colegio !== "puntual" || justif.has(id)) && (
                         <Justificar key={`j|${fechaCargada}|${id}`} estudianteId={id} fecha={fechaCargada}
                           tipoSugerido={it.fila.estado_colegio === "tardanza" ? "tardanza" : "falta"} actual={justif.get(id)}
                           onCambio={(j) => setJustif((m) => {
@@ -350,11 +384,13 @@ function Contenido() {
                       {it.motivo === "sin_novedad" ? null : justificado(it) ? (
                         <span className="text-blue-700 text-xs font-semibold">Justificado</span>
                       ) : it.fila.celular_apoderado ? (
-                        <button onClick={() => avisar(it)}
-                          className={`px-2 py-1 rounded text-white ${ya ? "bg-gray-400" : "bg-green-600"}`}>
-                          {ya ? "Avisado ✓ (reenviar)" : "Avisar"}
+                        <button onClick={() => avisar(it)} title={ya ? "Enviar otra vez" : "Avisar por WhatsApp"}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold whitespace-nowrap ${
+                            ya ? "bg-slate-100 text-slate-600" : "bg-green-600 text-white shadow"}`}>
+                          <Icono nombre={ya ? "check" : "whatsapp"} className="w-4 h-4" />
+                          {ya ? "Avisado" : "Avisar"}
                         </button>
-                      ) : <span className="text-red-600">Sin celular</span>}
+                      ) : <span className="rounded-full bg-slate-100 text-slate-500 px-2.5 py-1 text-xs whitespace-nowrap">Sin celular</span>}
                     </td>
                     {primera && (
                       <td className="p-2" rowSpan={filasPorAlumno.get(id)}>

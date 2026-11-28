@@ -2,5 +2,76 @@
 @tailwind components;
 @tailwind utilities;
 
-body { font-family: system-ui, Arial, sans-serif; color: #111; }
-@media print { body { background: #fff; } }
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+  color: #0f172a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Estilo común de las pantallas internas ---------- */
+.app-main h2 { letter-spacing: -0.02em; }
+
+.app-main input:not([type="checkbox"]):not([type="file"]),
+.app-main select,
+.app-main textarea {
+  border-radius: 0.7rem;
+  border: 1px solid #e2e8f0;
+  background-color: #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.app-main input:not([type="checkbox"]):not([type="file"]):hover:not(:disabled),
+.app-main select:hover:not(:disabled),
+.app-main textarea:hover:not(:disabled) { border-color: #cbd5e1; }
+.app-main input:focus,
+.app-main select:focus,
+.app-main textarea:focus {
+  outline: none;
+  border-color: #b91c1c;
+  box-shadow: 0 0 0 3px rgb(185 28 28 / 0.15);
+}
+.app-main input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: #b91c1c; vertical-align: -2px; }
+.app-main input[type="file"]::file-selector-button {
+  margin-right: 0.75rem; border: 0; border-radius: 0.7rem; padding: 0.55rem 1rem;
+  background: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer;
+}
+
+.app-main button { border-radius: 0.7rem; cursor: pointer; transition: transform 0.1s, filter 0.15s, box-shadow 0.15s; }
+.app-main button:hover:not(:disabled) { filter: brightness(0.95); }
+.app-main button:active:not(:disabled) { transform: scale(0.97); }
+.app-main button:disabled { cursor: not-allowed; }
+.app-main button:focus-visible, .app-main a:focus-visible { outline: 2px solid #b91c1c; outline-offset: 2px; }
+
+/* tarjetas, formularios y contenedores de tablas */
+.app-main .bg-white.border.rounded {
+  border-radius: 1rem;
+  border-color: #e8edf3;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -16px rgb(15 23 42 / 0.18);
+}
+
+.app-main table thead th {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.app-main table thead th:first-child { padding-left: 0.75rem; }
+.app-main table tbody tr { border-color: #eef2f6; transition: background-color 0.12s; }
+.app-main table tbody tr:hover { background-color: #f8fafc; }
+.app-main table td:first-child { padding-left: 0.75rem; }
+
+.fade-in { animation: aparecer 0.25s ease-out; }
+@keyframes aparecer { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .fade-in { animation: none; }
+  .app-main button { transition: none; }
+}
+
+@media print {
+  body { background: #fff; }
+  .app-main .bg-white.border.rounded { box-shadow: none; }
+}

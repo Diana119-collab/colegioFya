@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase, hoyLima } from "@/lib/supabase";
 import { leerTodo } from "@/lib/ept";
 import { usePerfil } from "@/components/Shell";
+import Icono from "@/components/Icono";
 
 export type Ingreso = { estado: "puntual" | "tardanza"; hora: string };
 
@@ -20,8 +21,8 @@ export function useHoraLimite() {
 }
 
 /** Registro manual (estudiante sin agenda): se indica la hora de llegada y el estado sale de la regla. */
-export function MarcarIngreso({ estudianteId, fecha, onListo }: {
-  estudianteId: string; fecha: string; onListo: (i: Ingreso) => void;
+export function MarcarIngreso({ estudianteId, fecha, onListo, onCancelar }: {
+  estudianteId: string; fecha: string; onListo: (i: Ingreso) => void; onCancelar?: () => void;
 }) {
   const perfil = usePerfil();
   const limite = useHoraLimite();
@@ -57,11 +58,19 @@ export function MarcarIngreso({ estudianteId, fecha, onListo }: {
     <div className="flex flex-wrap items-center gap-2 print:hidden">
       <input type="time" className="border rounded p-1 text-sm" aria-label="Hora de llegada"
         value={hora} onChange={(e) => setElegida(e.target.value)} />
+      {/* verde = puntual, naranja = tardanza, según la hora elegida */}
       <button type="button" onClick={registrar} disabled={!hora || busy}
-        className={`px-2 py-1 rounded text-xs text-white disabled:opacity-40 ${
-          !hora ? "bg-gray-500" : estado === "puntual" ? "bg-green-700" : "bg-amber-600"}`}>
-        {busy ? "…" : hora ? `Registrar ${estado}` : "Indica la hora"}
+        title={!hora ? "Indica la hora de llegada" : `Guardar como ${estado}`}
+        aria-label={!hora ? "Guardar" : `Guardar como ${estado}`}
+        className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 ${
+          !hora ? "bg-gray-500" : estado === "puntual" ? "bg-green-700" : "bg-orange-600"}`}>
+        {hora && <Icono nombre={estado === "puntual" ? "check" : "reloj"} className="w-3.5 h-3.5" />}
+        {busy ? "Guardando…" : "Guardar"}
       </button>
+      {onCancelar && (
+        <button type="button" onClick={onCancelar} disabled={busy}
+          className="border border-slate-300 bg-white text-slate-700 px-3 py-1.5 text-xs">Cancelar</button>
+      )}
       {msg && <span className="text-xs text-red-700">{msg}</span>}
     </div>
   );
@@ -74,9 +83,9 @@ export function IngresoDesplegable(props: React.ComponentProps<typeof MarcarIngr
   if (!abierto)
     return (
       <button type="button" onClick={() => setAbierto(true)}
-        className="block text-xs text-red-700 underline print:hidden">Registrar ingreso manual</button>
+        className="mt-1 mr-1 bg-slate-100 text-slate-700 px-2.5 py-1 text-xs font-medium print:hidden">+ Registrar ingreso manual</button>
     );
-  return <MarcarIngreso {...props} />;
+  return <MarcarIngreso {...props} onCancelar={() => setAbierto(false)} />;
 }
 
 type Est = {
